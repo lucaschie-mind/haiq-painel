@@ -1,0 +1,227 @@
+// prisma/schema.prisma
+//
+// Schema completo do HAI-Q multi-tenant.
+// Os models Session, Log e Evaluation já existem — ganharam campos novos,
+// marcados com  // NOVO  abaixo. Os demais models são novos.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TENANT — a empresa cliente
+// ═══════════════════════════════════════════════════════════════
+
+model Tenant {
+  id           String   @id @default(uuid())
+  /// Identificador curto usado em links e na config (ex.: "clientex")
+  slug         String   @unique
+  nome         String
+  /// Config de renderização da devolutiva. null = versão completa.
+  /// Ex.: { "mostrarPareceres": false }
+  reportConfig Json?
+  ativo        Boolean  @default(true)
+  criadoEm     DateTime @default(now())
+
+  creditLots CreditLot[]
+  invites    Invite[]
+  users      User[]
+  sessions   Session[]
+
+  @@index([slug])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CRÉDITOS — extrato de lotes comprados
+// ═══════════════════════════════════════════════════════════════
+
+model CreditLot {
+  id         String   @id @default(uuid())
+  tenantId   String
+  /// Positivo para compra. Negativo permite estorno/ajuste manual.
+  quantidade Int
+  /// Referência da compra: nº da proposta, NF, observação interna
+  nota       String?
+  criadoEm   DateTime @default(now())
+  /// Usuário admin que lançou o crédito
+  criadoPor  String?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CONVITE — uma pessoa autorizada a fazer o teste
+// O id é o token do link: /i/{id}
+// ═══════════════════════════════════════════════════════════════
+
+enum InviteStatus {
+  PENDING   // convite criado, pessoa ainda não começou — crédito reservado
+  STARTED   // pessoa iniciou o teste — crédito consumido, irreversível
+  COMPLETED // pessoa concluiu o teste
+  CANCELED  // convite cancelado antes de iniciar — crédito devolvido
+}
+
+model Invite {
+  id       String       @id @default(uuid())
+  tenantId String
+  email    String
+  nome     String?
+  status   InviteStatus @default(PENDING)
+
+  criadoEm     DateTime  @default(now())
+  /// Preenchido quando o e-mail de convite é enviado
+  enviadoEm    DateTime?
+  iniciadoEm   DateTime?
+  concluidoEm  DateTime?
+  canceladoEm  DateTime?
+  canceladoPor String?
+
+  /// Sessão gerada por este convite. Único: um convite não vira duas sessões.
+  sessionId String?  @unique
+  session   Session? @relation(fields: [sessionId], references: [id])
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// Impede convidar o mesmo e-mail duas vezes no mesmo tenant.
+  /// Para reconvidar alguém cancelado, cancele e crie um novo com outro e-mail,
+  /// ou remova o registro cancelado.
+  @@unique([tenantId, email])
+  @@index([tenantId, status])
+  @@index([email])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// USUÁRIO — quem acessa o painel
+// ═══════════════════════════════════════════════════════════════
+
+enum UserRole {
+  ADMIN  // Mindsight: vê todos os tenants, lança créditos, cria usuários
+  TENANT // Cliente: vê apenas o próprio tenant
+}
+
+model User {
+  id       String   @id @default(uuid())
+  email    String   @unique
+  nome     String
+  role     UserRole @default(TENANT)
+  /// Obrigatório para role TENANT, nulo para ADMIN
+  tenantId String?
+  ativo    Boolean  @default(true)
+  criadoEm DateTime @default(now())
+  ultimoLogin DateTime?
+
+  tenant Tenant?          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tokens MagicLinkToken[]
+
+  @@index([tenantId])
+  @@index([email])
+}
+
+/// Token de uso único para login sem senha
+model MagicLinkToken {
+  id       String    @id @default(uuid())
+  /// Hash do token. O valor em claro só existe no link enviado por e-mail.
+  tokenHash String   @unique
+  userId   String
+  expiraEm DateTime
+  usadoEm  DateTime?
+  criadoEm DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiraEm])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SESSION — já existe, ganha vínculo com tenant e convite
+// ═══════════════════════════════════════════════════════════════
+
+model Session {
+  id              String    @id @default(uuid())
+  candidateName   String
+  candidateEmail  String
+  caseId          String
+  caseTitle       String
+  caseDomain      String
+  startedAt       DateTime  @default(now())
+  completedAt     DateTime?
+  durationSeconds Int?
+  finalOutput     String?
+  postTestBlockA  Json?
+  postTestBlockB  Json?
+  postTestBlockC  Json?
+  postTestBlockD  Json?
+  postTestAvgA    Float?
+  postTestAvgB    Float?
+  postTestAvgC    Float?
+  postTestAvgD    Float?
+
+  tenantId String? // NOVO — nulo em sessões anteriores ao multi-tenant
+
+  logs       Log[]
+  evaluation Evaluation?
+  invite     Invite? // NOVO — relação inversa
+  tenant     Tenant? @relation(fields: [tenantId], references: [id]) // NOVO
+
+  @@index([candidateEmail])
+  @@index([caseId])
+  @@index([startedAt])
+  @@index([tenantId]) // NOVO
+}
+
+// ═══════════════════════════════════════════════════════════════
+// LOG e EVALUATION — sem alteração
+// ═══════════════════════════════════════════════════════════════
+
+model Log {
+  id             Int      @id @default(autoincrement())
+  sessionId      String
+  sequenceNumber Int
+  role           String
+  content        String
+  createdAt      DateTime @default(now())
+  session        Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, sequenceNumber])
+}
+
+model Evaluation {
+  id              String   @id @default(uuid())
+  sessionId       String   @unique
+  d1Score         Float?
+  d2Score         Float?
+  d3Score         Float?
+  d4Score         Float?
+  haiqScore       Float?
+  humanAgencyPct  Float?
+  aiAgencyPct     Float?
+  agencyClass     String?
+  d1Parecer       String?
+  d2Parecer       String?
+  d3Parecer       String?
+  d4Parecer       String?
+  contextNote     String?
+  hasGapD1        Boolean  @default(false)
+  hasGapD2        Boolean  @default(false)
+  hasGapD3        Boolean  @default(false)
+  hasGapD4        Boolean  @default(false)
+  gapLabels       String?
+  gapsJson        Json?
+  interviewQsJson Json?
+  evidenceD1      Json?
+  evidenceD2      Json?
+  evidenceD3      Json?
+  evidenceD4      Json?
+  evidenceAgency  Json?
+  evaluationPath  String?
+  evaluatedAt     DateTime @default(now())
+  session         Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+}
