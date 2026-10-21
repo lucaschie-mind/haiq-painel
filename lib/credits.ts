@@ -42,7 +42,7 @@ export async function saldoDoTenant(tenantId: string): Promise<SaldoCreditos> {
   ]);
 
   const por = (s: string) =>
-    contagens.find((c: { status: string; _count: { _all: number } }) => c.status === s)?._count._all ?? 0;
+    (contagens as any[]).find((c) => c.status === s)?._count?._all ?? 0;
 
   const total       = lotes._sum.quantidade ?? 0;
   const reservados  = por("PENDING");
@@ -149,13 +149,19 @@ export async function criarConvites(
   tenantId: string,
   linhas: LinhaConvite[]
 ): Promise<{ criados: number; ids: string[] }> {
-  return prisma.$transaction(async (tx: typeof prisma) => {
+  // O cast é necessário porque $transaction tem duas assinaturas (array e
+  // callback) e o TypeScript escolhe a de array por engano aqui.
+  const executar = prisma.$transaction.bind(prisma) as (
+    fn: (tx: any) => Promise<{ criados: number; ids: string[] }>
+  ) => Promise<{ criados: number; ids: string[] }>;
+
+  return executar(async (tx: any) => {
     const lotes = await tx.creditLot.aggregate({
       where: { tenantId },
       _sum: { quantidade: true },
     });
     const ativos = await tx.invite.count({
-      where: { tenantId, status: { in: ["PENDING", "STARTED", "COMPLETED"] } },
+      where: { tenantId, status: { in: ["PENDING", "STARTED", "COMPLETED"] as any } },
     });
 
     const livre = (lotes._sum.quantidade ?? 0) - ativos;
@@ -207,7 +213,7 @@ export async function cancelarConvite(
 
   await prisma.invite.update({
     where: { id: inviteId },
-    data: { status: "CANCELED", canceladoEm: new Date(), canceladoPor: userId },
+    data: { status: "CANCELED" as any, canceladoEm: new Date(), canceladoPor: userId },
   });
 }
 
