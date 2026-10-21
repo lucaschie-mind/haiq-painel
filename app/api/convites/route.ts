@@ -11,7 +11,7 @@ export async function GET(req: NextRequest) {
   try {
     const { tenantId } = resolverTenant(req.nextUrl.searchParams.get("tenantId"));
     const convites = await prisma.invite.findMany({
-      where: { tenantId, status: { not: "CANCELED" } },
+      where: { tenantId, status: { not: "CANCELED" as any } },
       orderBy: { criadoEm: "desc" },
       include: { session: { select: { id: true, completedAt: true, evaluation: { select: { haiqScore: true } } } } },
     });
@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
 
     const [saldo, existentes, tenant] = await Promise.all([
       saldoDoTenant(tenantId),
-      prisma.invite.findMany({ where: { tenantId, status: { not: "CANCELED" } }, select: { email: true } }),
+      prisma.invite.findMany({ where: { tenantId, status: { not: "CANCELED" as any } }, select: { email: true } }),
       prisma.tenant.findUnique({ where: { id: tenantId } }),
     ]);
 
