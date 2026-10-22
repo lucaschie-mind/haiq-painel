@@ -1,9 +1,13 @@
 "use client";
-import { useState, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, useCallback, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Topo, Metrica, B, CARD, H2, INP } from "../ui";
 
-interface Saldo { total: number; reservados: number; consumidos: number; iniciados: number; concluidos: number; livre: number; }
+interface Saldo {
+  total: number; reservados: number; consumidos: number;
+  iniciados: number; concluidos: number; livre: number;
+  tenantNome?: string | null;
+}
 interface Convite {
   id: string; email: string; nome: string | null; status: string;
   criadoEm: string; enviadoEm: string | null; iniciadoEm: string | null;
@@ -16,9 +20,22 @@ const ROTULO: Record<string, { txt: string; cor: string; bg: string }> = {
   COMPLETED: { txt: "Concluído",             cor: "#085041", bg: "#E1F5EE" },
 };
 
-export default function Painel() {
+export default function Page() {
+  return (
+    <Suspense fallback={<main style={{ padding: "4rem", textAlign: "center", color: "#666" }}>Carregando...</main>}>
+      <Painel />
+    </Suspense>
+  );
+}
+
+function Painel() {
   const router = useRouter();
-  const [me, setMe]             = useState<{ nome: string; tenantNome: string | null; tenantId: string | null } | null>(null);
+
+  // Admin pode abrir o painel de um cliente via ?tenant={id}.
+  // Usuário comum ignora o parâmetro — a API só aceita o tenant dele.
+  const tenantParam = useSearchParams().get("tenant");
+  const q = tenantParam ? `?tenantId=${encodeURIComponent(tenantParam)}` : "";
+  const [me, setMe]             = useState<{ nome: string; role: string; tenantNome: string | null; tenantId: string | null } | null>(null);
   const [saldo, setSaldo]       = useState<Saldo | null>(null);
   const [convites, setConvites] = useState<Convite[]>([]);
   const [carregando, setCarregando] = useState(true);
@@ -32,14 +49,14 @@ export default function Painel() {
 
   const carregar = useCallback(async () => {
     const [rMe, rSaldo, rConv] = await Promise.all([
-      fetch("/api/me"), fetch("/api/saldo"), fetch("/api/convites"),
+      fetch("/api/me"), fetch(`/api/saldo${q}`), fetch(`/api/convites${q}`),
     ]);
     if (rMe.status === 401) { router.replace("/login"); return; }
     setMe(await rMe.json());
     setSaldo(await rSaldo.json());
     setConvites((await rConv.json()).convites ?? []);
     setCarregando(false);
-  }, [router]);
+  }, [router, q]);
 
   useEffect(() => { carregar(); }, [carregar]);
 
@@ -62,7 +79,7 @@ export default function Painel() {
     try {
       const r = await fetch("/api/convites", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ linhas: pendentes, enviarEmail }),
+        body: JSON.stringify({ linhas: pendentes, enviarEmail, ...(tenantParam ? { tenantId: tenantParam } : {}) }),
       });
       const d = await r.json();
       if (!r.ok) { setErro(d.error); setResultado(d.validacao ? { rejeitados: d.validacao.rejeitados } : null); return; }
@@ -81,9 +98,27 @@ export default function Painel() {
 
   if (carregando) return <main style={{ padding: "4rem", textAlign: "center", color: "#666" }}>Carregando...</main>;
 
+  const modoAdmin = !!tenantParam && me?.role === "ADMIN";
+
   return (
     <main style={{ minHeight: "100vh" }}>
-      <Topo nome={me?.tenantNome ?? "Painel"} sub={me?.nome} />
+      <Topo nome={saldo?.tenantNome ?? me?.tenantNome ?? "Painel"} sub={me?.nome} />
+
+      {modoAdmin && (
+        <div style={{ background: "#FFF8E1", borderBottom: "1px solid #F3E0B5",
+          padding: "9px 1.5rem", display: "flex", alignItems: "center",
+          justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+          <span style={{ fontSize: 13, color: "#633806" }}>
+            Você está vendo o painel como <strong>{saldo?.tenantNome ?? "este cliente"}</strong>.
+            Tudo que fizer aqui vale para esse cliente.
+          </span>
+          <a href="/admin" style={{ fontSize: 12.5, fontWeight: 600, color: "#854F0B",
+            textDecoration: "none", border: "1px solid #E8CC8E", borderRadius: 7,
+            padding: "5px 12px", background: "#fff" }}>
+            ← Voltar para administração
+          </a>
+        </div>
+      )}
 
       <div style={{ maxWidth: 1000, margin: "0 auto", padding: "1.5rem 1rem 3rem" }}>
 
@@ -158,10 +193,10 @@ export default function Painel() {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: "1rem" }}>
             <h2 style={{ ...H2, margin: 0 }}>Pessoas convidadas</h2>
             <div style={{ display: "flex", gap: 8 }}>
-              <a href="/api/export/convites" style={{ ...B.sec, textDecoration: "none", display: "inline-block" }}>
+              <a href={`/api/export/convites${q}`} style={{ ...B.sec, textDecoration: "none", display: "inline-block" }}>
                 Exportar convites
               </a>
-              <a href="/api/export/resultados" style={{ ...B.sec, textDecoration: "none", display: "inline-block" }}>
+              <a href={`/api/export/resultados${q}`} style={{ ...B.sec, textDecoration: "none", display: "inline-block" }}>
                 Exportar resultados
               </a>
             </div>
