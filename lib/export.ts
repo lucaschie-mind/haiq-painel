@@ -44,3 +44,18 @@ export const ROTULO_STATUS: Record<string, string> = {
   COMPLETED: "Concluído",
   CANCELED:  "Cancelado",
 };
+
+/**
+ * Status real do convite.
+ *
+ * A fonte da verdade sobre conclusão é a sessão: se completedAt existe,
+ * a pessoa terminou. O campo status do convite pode ficar em STARTED
+ * porque o app de assessment não o atualiza ao concluir.
+ */
+export function statusEfetivo(
+  status: string,
+  sessao?: { completedAt?: Date | string | null } | null
+): string {
+  if (status === "STARTED" && sessao?.completedAt) return "COMPLETED";
+  return status;
+}
