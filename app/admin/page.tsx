@@ -36,6 +36,11 @@ export default function Admin() {
   const [uTenant, setUTenant] = useState("");
   const [msg, setMsg] = useState<{ tipo: "ok" | "erro"; txt: string } | null>(null);
 
+  // Criação de usuário direto no card do cliente
+  const [expandido, setExpandido] = useState<string | null>(null);
+  const [inNome, setInNome]   = useState("");
+  const [inEmail, setInEmail] = useState("");
+
   const carregar = useCallback(async () => {
     const [rMe, rT, rU] = await Promise.all([
       fetch("/api/me"), fetch("/api/tenants"), fetch("/api/usuarios"),
@@ -87,6 +92,19 @@ export default function Admin() {
       body: JSON.stringify({ reportConfig: Object.keys(limpo).length ? limpo : null }),
     });
     if (!r.ok) { alert((await r.json()).error); return; }
+    await carregar();
+  }
+
+  async function criarUsuarioDoTenant(tenantId: string) {
+    setMsg(null);
+    const r = await fetch("/api/usuarios", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nome: inNome, email: inEmail, role: "TENANT", tenantId }),
+    });
+    const d = await r.json();
+    if (!r.ok) { setMsg({ tipo: "erro", txt: d.error }); return; }
+    setInNome(""); setInEmail("");
+    setMsg({ tipo: "ok", txt: `${d.usuario.nome} já pode entrar pelo link mágico.` });
     await carregar();
   }
 
@@ -183,6 +201,11 @@ export default function Admin() {
                       </div>
                     ))}
                     <button onClick={() => addCreditos(t)} style={B.sec}>Lançar créditos</button>
+                    <a href={`/painel?tenant=${t.id}`}
+                      style={{ ...B.sec, textDecoration: "none", display: "inline-block",
+                        borderColor: "#cfdcea", color: "#0C447C" }}>
+                      Abrir painel
+                    </a>
                   </div>
                 </div>
 
@@ -204,6 +227,61 @@ export default function Admin() {
                       );
                     })}
                   </div>
+                </div>
+
+                {/* Usuários deste cliente */}
+                <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid #f0f4f8" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 700, color: "#5F5E5A" }}>
+                      Usuários com acesso
+                      {(() => {
+                        const n = usuarios.filter(u => u.tenantId === t.id).length;
+                        return <span style={{ fontWeight: 400, color: "#999" }}> · {n === 0 ? "nenhum ainda" : n === 1 ? "1 pessoa" : `${n} pessoas`}</span>;
+                      })()}
+                    </div>
+                    <button
+                      onClick={() => { setExpandido(expandido === t.id ? null : t.id); setInNome(""); setInEmail(""); }}
+                      style={{ ...B.sec, padding: "6px 13px", fontSize: 12.5 }}>
+                      {expandido === t.id ? "Fechar" : "+ Adicionar usuário"}
+                    </button>
+                  </div>
+
+                  {usuarios.filter(u => u.tenantId === t.id).length > 0 && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginTop: 10 }}>
+                      {usuarios.filter(u => u.tenantId === t.id).map(u => (
+                        <span key={u.id} title={u.email}
+                          style={{ fontSize: 12, padding: "5px 11px", borderRadius: 7, background: "#f5f7fa",
+                            border: "1px solid #e6ebf2", color: "#444" }}>
+                          {u.nome}
+                          <span style={{ color: "#aaa" }}>
+                            {" · "}{u.ultimoLogin ? "acessou" : "nunca entrou"}
+                          </span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {expandido === t.id && (
+                    <div style={{ display: "flex", gap: 9, flexWrap: "wrap", alignItems: "flex-end",
+                      marginTop: 12, padding: "12px 14px", background: "#f8fafc", borderRadius: 9 }}>
+                      <div style={{ flex: "1 1 150px" }}>
+                        <label style={LBL}>Nome</label>
+                        <input value={inNome} onChange={e => setInNome(e.target.value)}
+                          placeholder="Nome da pessoa" style={{ ...INP, width: "100%" }} />
+                      </div>
+                      <div style={{ flex: "2 1 200px" }}>
+                        <label style={LBL}>E-mail</label>
+                        <input value={inEmail} onChange={e => setInEmail(e.target.value)} type="email"
+                          placeholder="pessoa@empresa.com.br" style={{ ...INP, width: "100%" }} />
+                      </div>
+                      <button onClick={() => criarUsuarioDoTenant(t.id)}
+                        disabled={!inNome.trim() || !inEmail.trim()}
+                        style={{ ...B.pri, padding: "9px 16px", fontSize: 13,
+                          ...(!inNome.trim() || !inEmail.trim() ? B.off : {}) }}>
+                        Criar acesso
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
