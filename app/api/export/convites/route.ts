@@ -1,9 +1,16 @@
-import { NextRequest, NextResponse } from "next/server";
+// app/api/export/convites/route.ts
+//
+// Exporta a lista de convites em Excel (.xlsx), com os links clicáveis.
+//
+// Objetivo prático: o RH abre o arquivo, distribui os links do teste para
+// quem ainda não fez, e acessa a devolutiva de quem já concluiu.
+
+import { NextRequest } from "next/server";
+import ExcelJS from "exceljs";
 import { resolverTenant } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { saldoDoTenant, validarLista, criarConvites, linkDoConvite } from "@/lib/credits";
-import { enviarEmail, emailConvite, emailAtivo } from "@/lib/email";
-import { statusEfetivo } from "@/lib/export";
+import { linkDoConvite } from "@/lib/credits";
+import { dataHoraArquivo, ROTULO_STATUS, statusEfetivo } from "@/lib/export";
 import { erro } from "@/lib/api";
 
 const ASSESSMENT = process.env.ASSESSMENT_URL || "";
@@ -11,76 +18,87 @@ const ASSESSMENT = process.env.ASSESSMENT_URL || "";
 export async function GET(req: NextRequest) {
   try {
     const { tenantId } = resolverTenant(req.nextUrl.searchParams.get("tenantId"));
-    const convites = await prisma.invite.findMany({
-      where: { tenantId, status: { not: "CANCELED" as any } },
-      orderBy: { criadoEm: "desc" },
-      include: { session: { select: { id: true, completedAt: true, evaluation: { select: { haiqScore: true } } } } },
-    });
-    return NextResponse.json({
-      convites: convites.map((c: any) => ({
-        id: c.id, email: c.email, nome: c.nome,
-        status: statusEfetivo(c.status, c.session),
-        criadoEm: c.criadoEm, enviadoEm: c.enviadoEm, iniciadoEm: c.iniciadoEm,
-        concluidoEm: c.concluidoEm, link: linkDoConvite(c.id, ASSESSMENT),
-        sessionId: c.sessionId, haiqScore: c.session?.evaluation?.haiqScore ?? null,
-      })),
-    });
-  } catch (e) { return erro(e); }
-}
 
-export async function POST(req: NextRequest) {
-  try {
-    const body = await req.json();
-    const { tenantId } = resolverTenant(body.tenantId);
-    const linhas: Array<{ email: string; nome?: string }> = body.linhas ?? [];
-    const enviarPorEmail: boolean = !!body.enviarEmail;
-
-    if (!Array.isArray(linhas) || linhas.length === 0) {
-      return NextResponse.json({ error: "Nenhuma pessoa informada." }, { status: 400 });
-    }
-
-    const [saldo, existentes, tenant] = await Promise.all([
-      saldoDoTenant(tenantId),
-      prisma.invite.findMany({ where: { tenantId, status: { not: "CANCELED" as any } }, select: { email: true } }),
-      prisma.tenant.findUnique({ where: { id: tenantId } }),
+    const [convites, tenant] = await Promise.all([
+      prisma.invite.findMany({
+        where: { tenantId, status: { not: "CANCELED" as any } },
+        orderBy: [{ status: "asc" }, { criadoEm: "desc" }],
+        include: { session: { select: { completedAt: true } } },
+      }),
+      prisma.tenant.findUnique({ where: { id: tenantId }, select: { nome: true } }),
     ]);
 
-    const validacao = validarLista(linhas, existentes.map((e: any) => e.email), saldo.livre);
+    const base = ASSESSMENT.replace(/\/$/, "");
 
-    if (!validacao.cabeNoSaldo) {
-      return NextResponse.json({
-        error: `Saldo insuficiente. Você tem ${saldo.livre} crédito(s) livre(s) e tentou convidar ${validacao.validos.length} pessoa(s).`,
-        validacao,
-      }, { status: 400 });
-    }
-    if (validacao.validos.length === 0) {
-      return NextResponse.json({ error: "Nenhuma pessoa válida na lista.", validacao }, { status: 400 });
-    }
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "HAI-Q";
+    wb.created = new Date();
 
-    const { ids } = await criarConvites(tenantId, validacao.validos);
+    const ws = wb.addWorksheet("Convites", {
+      views: [{ state: "frozen", ySplit: 1 }], // cabeçalho fixo ao rolar
+    });
 
-    let enviados = 0;
-    const falhasEnvio: string[] = [];
-    if (enviarPorEmail && emailAtivo()) {
-      for (let i = 0; i < ids.length; i++) {
-        const pessoa = validacao.validos[i];
-        const link = linkDoConvite(ids[i], ASSESSMENT);
-        const modelo = emailConvite(pessoa.nome ?? null, link, tenant?.nome ?? "Sua empresa");
-        const r = await enviarEmail({ para: pessoa.email, paraNome: pessoa.nome, ...modelo });
-        if (r.enviado) {
-          enviados++;
-          await prisma.invite.update({ where: { id: ids[i] }, data: { enviadoEm: new Date() } });
-        } else { falhasEnvio.push(pessoa.email); }
+    ws.columns = [
+      { header: "Nome",          key: "nome",   width: 32 },
+      { header: "E-mail",        key: "email",  width: 36 },
+      { header: "Status",        key: "status", width: 22 },
+      { header: "Link do teste", key: "link",   width: 60 },
+      { header: "Devolutiva",    key: "devo",   width: 60 },
+    ];
+
+    const cab = ws.getRow(1);
+    cab.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+    cab.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF042C53" } };
+    cab.alignment = { vertical: "middle" };
+    cab.height = 22;
+
+    const estiloLink = { color: { argb: "FF185FA5" }, underline: true } as const;
+
+    for (const c of convites) {
+      const status = statusEfetivo(c.status, c.session);
+      const linkTeste = linkDoConvite(c.id, base);
+
+      // A devolutiva só existe depois que a pessoa conclui o teste
+      const linkDevo =
+        status === "COMPLETED" && c.sessionId
+          ? `${base}/devolutiva/${c.sessionId}`
+          : "";
+
+      const linha = ws.addRow({
+        nome:   c.nome ?? "",
+        email:  c.email,
+        status: ROTULO_STATUS[status] ?? status,
+        link:   linkTeste,
+        devo:   linkDevo,
+      });
+
+      // Links clicáveis mostrando a URL completa — dá para clicar ou copiar
+      const celTeste = linha.getCell("link");
+      celTeste.value = { text: linkTeste, hyperlink: linkTeste };
+      celTeste.font = estiloLink;
+
+      if (linkDevo) {
+        const celDevo = linha.getCell("devo");
+        celDevo.value = { text: linkDevo, hyperlink: linkDevo };
+        celDevo.font = estiloLink;
       }
+
+      linha.alignment = { vertical: "middle" };
     }
 
-    return NextResponse.json({
-      criados: ids.length, enviados, falhasEnvio, emailAtivo: emailAtivo(),
-      rejeitados: validacao.rejeitados,
-      links: ids.map((id, i) => ({
-        email: validacao.validos[i].email, nome: validacao.validos[i].nome ?? null,
-        link: linkDoConvite(id, ASSESSMENT),
-      })),
+    ws.autoFilter = { from: "A1", to: `E${convites.length + 1}` };
+
+    const buffer = await wb.xlsx.writeBuffer();
+    const nomeCliente = (tenant?.nome ?? "cliente")
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-zA-Z0-9]+/g, "_").toLowerCase();
+
+    return new Response(buffer, {
+      headers: {
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": `attachment; filename="convites_${nomeCliente}_${dataHoraArquivo()}.xlsx"`,
+        "Cache-Control": "no-store",
+      },
     });
   } catch (e) { return erro(e); }
 }
