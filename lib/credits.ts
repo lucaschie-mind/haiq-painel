@@ -1,5 +1,5 @@
 // lib/credits.ts
-//
+// 
 // Regras de crédito do HAI-Q.
 //
 // Princípio: o saldo nunca é um campo que decrementa — é sempre contagem.
