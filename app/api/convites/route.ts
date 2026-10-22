@@ -3,6 +3,7 @@ import { resolverTenant } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { saldoDoTenant, validarLista, criarConvites, linkDoConvite } from "@/lib/credits";
 import { enviarEmail, emailConvite, emailAtivo } from "@/lib/email";
+import { statusEfetivo } from "@/lib/export";
 import { erro } from "@/lib/api";
 
 const ASSESSMENT = process.env.ASSESSMENT_URL || "";
@@ -17,7 +18,8 @@ export async function GET(req: NextRequest) {
     });
     return NextResponse.json({
       convites: convites.map((c: any) => ({
-        id: c.id, email: c.email, nome: c.nome, status: c.status,
+        id: c.id, email: c.email, nome: c.nome,
+        status: statusEfetivo(c.status, c.session),
         criadoEm: c.criadoEm, enviadoEm: c.enviadoEm, iniciadoEm: c.iniciadoEm,
         concluidoEm: c.concluidoEm, link: linkDoConvite(c.id, ASSESSMENT),
         sessionId: c.sessionId, haiqScore: c.session?.evaluation?.haiqScore ?? null,
