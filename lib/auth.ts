@@ -67,7 +67,10 @@ function verificar(assinado: string): string | null {
  * o chamador deve responder igual nos dois casos, para não revelar
  * quais e-mails existem no sistema.
  */
-export async function gerarLinkMagico(email: string): Promise<{ link: string; nome: string } | null> {
+export async function gerarLinkMagico(
+  email: string,
+  baseUrl?: string
+): Promise<{ link: string; nome: string } | null> {
   const user = await prisma.user.findFirst({
     where: { email: email.trim().toLowerCase(), ativo: true },
   });
@@ -83,7 +86,12 @@ export async function gerarLinkMagico(email: string): Promise<{ link: string; no
     },
   });
 
-  const base = (process.env.PAINEL_URL || "http://localhost:3000").replace(/\/$/, "");
+  // Prioridade: URL vinda da requisição > variável de ambiente > localhost.
+  //
+  // A URL da requisição é a mais confiável porque o Next.js substitui
+  // referências a process.env durante o BUILD. Uma variável adicionada
+  // depois do build não é enxergada pelo código já compilado.
+  const base = (baseUrl || process.env.PAINEL_URL || "http://localhost:3000").replace(/\/$/, "");
   return { link: `${base}/login/verificar?t=${token}`, nome: user.nome };
 }
 
